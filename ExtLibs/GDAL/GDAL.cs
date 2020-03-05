@@ -1,15 +1,19 @@
-﻿using GMap.NET;
-using log4net;
+﻿using System;
 using OSGeo.GDAL;
-using OSGeo.OGR;
-using OSGeo.OSR;
-using System;
-using System.Collections.Generic;
-using System.Drawing;
 using System.Drawing.Imaging;
-using System.IO;
+using System.Drawing;
+using log4net;
 using System.Reflection;
-using System.Runtime.InteropServices;
+using OSGeo.OSR;
+using log4net.Layout;
+using log4net.Appender;
+using log4net.Config;
+using System.IO;
+using System.Collections.Generic;
+using GMap.NET;
+using GMap.NET.MapProviders;
+using System.Drawing.Drawing2D;
+using OSGeo.OGR;
 
 namespace GDAL
 {
@@ -79,7 +83,7 @@ namespace GDAL
                     log.InfoFormat("  Metadata:");
                     for (int iMeta = 0; iMeta < metadata.Length; iMeta++)
                     {
-                         log.InfoFormat("    " + iMeta + ":  " + metadata[iMeta]);
+                        // log.InfoFormat("    " + iMeta + ":  " + metadata[iMeta]);
                     }
                     log.InfoFormat("");
                 }
@@ -218,8 +222,8 @@ namespace GDAL
                             cleared = true;
                         }
 
-                        //if (image.Resolution < (res / 3))
-                            //continue;
+                        if (image.Resolution < (res / 3))
+                            continue;
 
                         //Console.WriteLine("{0} <= {1} && {2} <= {3} || {4} >= {5} && {6} >= {7} ", rect.Left, image.RasterXSize, rect.Top, image.RasterYSize, rect.Right, 0, rect.Bottom, 0);
 
@@ -267,126 +271,44 @@ namespace GDAL
             {
                 using (var ds = OSGeo.GDAL.Gdal.Open(file, OSGeo.GDAL.Access.GA_ReadOnly))
                 {
-                    // 8bit geotiff - single band
-                    if (ds.RasterCount == 1)
+                    // Get the GDAL Band objects from the Dataset
+                    Band band = ds.GetRasterBand(1);
+                    if (band == null)
+                        return null;
+                    ColorTable ct = band.GetRasterColorTable();
+                    // Create a Bitmap to store the GDAL image in
+                    Bitmap bitmap = new Bitmap(ds.RasterXSize, ds.RasterYSize, PixelFormat.Format8bppIndexed);
+                    // Obtaining the bitmap buffer
+                    BitmapData bitmapData = bitmap.LockBits(new Rectangle(0, 0, ds.RasterXSize, ds.RasterYSize),
+                        ImageLockMode.ReadWrite, PixelFormat.Format8bppIndexed);
+                    try
                     {
-                        Band band = ds.GetRasterBand(1);
-                        if (band == null)
-                            return null;
-
-                        ColorTable ct = band.GetRasterColorTable();
-
-                        PixelFormat format = PixelFormat.Format8bppIndexed;
-
-                        // Create a Bitmap to store the GDAL image in
-                        Bitmap bitmap = new Bitmap(ds.RasterXSize, ds.RasterYSize, format);
-
-                        // Obtaining the bitmap buffer
-                        BitmapData bitmapData = bitmap.LockBits(new Rectangle(0, 0, ds.RasterXSize, ds.RasterYSize),
-                            ImageLockMode.ReadWrite, format);
-                        try
+                        if (ct != null)
                         {
-                            if (ct != null)
+                            int iCol = ct.GetCount();
+                            ColorPalette pal = bitmap.Palette;
+                            for (int i = 0; i < iCol; i++)
                             {
-                                int iCol = ct.GetCount();
-                                ColorPalette pal = bitmap.Palette;
-                                for (int i = 0; i < iCol; i++)
-                                {
-                                    ColorEntry ce = ct.GetColorEntry(i);
-                                    pal.Entries[i] = Color.FromArgb(ce.c4, ce.c1, ce.c2, ce.c3);
-                                }
-
-                                bitmap.Palette = pal;
+                                ColorEntry ce = ct.GetColorEntry(i);
+                                pal.Entries[i] = Color.FromArgb(ce.c4, ce.c1, ce.c2, ce.c3);
                             }
-                            else
-                            {
-
-                            }
-
-                            int stride = bitmapData.Stride;
-                            IntPtr buf = bitmapData.Scan0;
-
-                            band.ReadRaster(0, 0, ds.RasterXSize, ds.RasterYSize, buf, ds.RasterXSize, ds.RasterYSize,
-                                DataType.GDT_Byte, 1, stride);
-                        }
-                        finally
-                        {
-                            bitmap.UnlockBits(bitmapData);
+                            bitmap.Palette = pal;
                         }
 
+                        int stride = bitmapData.Stride;
+                        IntPtr buf = bitmapData.Scan0;
 
-                        return bitmap;
+                        band.ReadRaster(0, 0, ds.RasterXSize, ds.RasterYSize, buf, ds.RasterXSize, ds.RasterYSize,
+                            DataType.GDT_Byte, 1, stride);
+                    }
+                    finally
+                    {
+                        bitmap.UnlockBits(bitmapData);
                     }
 
-                    {
-                        Bitmap bitmap = new Bitmap(ds.RasterXSize, ds.RasterYSize, PixelFormat.Format32bppArgb);
-
-                        for (int a = 1; a <= ds.RasterCount; a++)
-                        {
-                            // Get the GDAL Band objects from the Dataset
-                            Band band = ds.GetRasterBand(a);
-                            if (band == null)
-                                return null;
-
-                            var cint = band.GetColorInterpretation();
-
-                
-                            // Obtaining the bitmap buffer
-                            BitmapData bitmapData = bitmap.LockBits(new Rectangle(0, 0, ds.RasterXSize, ds.RasterYSize),
-                                ImageLockMode.ReadWrite, PixelFormat.Format32bppArgb);
-                            try
-                            {
-
-                                int stride = bitmapData.Stride;
-                                IntPtr buf = bitmapData.Scan0;
-                                var buffer = new byte[ds.RasterXSize * ds.RasterYSize];
-
-                                band.ReadRaster(0, 0, ds.RasterXSize, ds.RasterYSize, buffer, ds.RasterXSize,
-                                    ds.RasterYSize, 1, ds.RasterXSize);
-
-                                int c = 0;
-                                if (cint == ColorInterp.GCI_AlphaBand)
-                                    foreach (var b in buffer)
-                                    {
-                                        Marshal.WriteByte(buf, 3 + c * 4, (byte)b);
-                                        c++;
-                                    }
-                                else if (cint == ColorInterp.GCI_RedBand)
-                                    foreach (var b in buffer)
-                                    {
-                                        Marshal.WriteByte(buf, 2 + c * 4, (byte)b);
-                                        c++;
-                                    }
-                                else if (cint == ColorInterp.GCI_GreenBand)
-                                    foreach (var b in buffer)
-                                    {
-                                        Marshal.WriteByte(buf, 1 + c * 4, (byte)b);
-                                        c++;
-                                    }
-                                else if (cint == ColorInterp.GCI_BlueBand)
-                                    foreach (var b in buffer)
-                                    {
-                                        Marshal.WriteByte(buf, 0 + c * 4, (byte)b);
-                                        c++;
-                                    }
-                                else
-                                {
-
-                                }
-                            }
-                            finally
-                            {
-                                bitmap.UnlockBits(bitmapData);
-                            }
-                        }
-
-                        //bitmap.Save("gdal.bmp", ImageFormat.Bmp);
-                        return bitmap;
-                    }
+                    return bitmap;
                 }
             }
-
-            return null;
         }
 
         private static string GDALInfoGetPosition(Dataset ds, double x, double y)
@@ -459,7 +381,7 @@ namespace GDAL
             var count = dataSource.GetLayerCount();
             Layer layer = dataSource.GetLayerByIndex(0);
             var litems = layer.GetFeatureCount(0);
-            var lname = layer.GetName();
+            var lname= layer.GetName();
             Envelope envelope = new Envelope();
             layer.GetExtent(envelope, 0);
             //Compute the out raster cell resolutions  
